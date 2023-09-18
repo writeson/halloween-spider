@@ -47,10 +47,31 @@ class LedTask(TaskBase):
     async def run(self):
         while True:
             await self._pause_event.wait()
+            old_red, old_grn, old_blu = 0, 0, 0
             print("Led task running")
+
+            # home in on random color
+            for i in range(20):
+                new_red, new_grn, new_blu = (randint(0, 255), randint(0, 255), randint(0, 255))
+                delta_red = (new_red - old_red) // 20
+                delta_grn = (new_grn - old_grn) // 20
+                delta_blu = (new_blu - old_blu) // 20
+                for _ in range(20):
+                    old_red, old_grn, old_blu = ((old_red + delta_red), (old_grn + delta_grn), (old_blu + delta_blu))
+                    self._led.color = (old_red, old_grn, old_blu)
+                    await asyncio.sleep(0.025)
+                await asyncio.sleep(1)
+
+            # home in on red
+            new_red, new_grn, new_blu = (255, 0, 0)
+            delta_red = (new_red - old_red) // 20
+            delta_grn = (new_grn - old_grn) // 20
+            delta_blu = (new_blu - old_blu) // 20
             for _ in range(20):
-                self._led.color = (randint(0, 255), randint(0, 255), randint(0, 255))
-                await asyncio.sleep(0.5)
+                old_red, old_grn, old_blu = ((old_red + delta_red), (old_grn + delta_grn), (old_blu + delta_blu))
+                self._led.color = (old_red, old_grn, old_blu)
+                await asyncio.sleep(0.025)
+            await asyncio.sleep(1)
             self._led.color = (255, 0, 0)
             await asyncio.sleep(1.0)
             self._led.color = (0, 0, 0)
@@ -136,7 +157,7 @@ class Pir:
                     # run the sound first and then the motor after a delay
                     speaker_task = self._tasks.get("speaker")
                     speaker_task.pause_event.set()
-                    await asyncio.sleep(3, 4)
+                    await asyncio.sleep(3)
                     motor_task = self._tasks.get("motor")
                     motor_task.pause_event.set()
 
