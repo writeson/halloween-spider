@@ -13,8 +13,8 @@ REQUIRED HARDWARE:
 from random import randint, choice
 
 import board
-import digitalio
 import asyncio
+import alarm
 import time
 import pwmio
 import adafruit_rgbled
@@ -27,10 +27,15 @@ class TaskBase:
     def __init__(self, name):
         self._name = name
         self._pause_event = asyncio.Event()
+        self._clear_event = asyncio.Event()
 
     @property
     def pause_event(self):
         return self._pause_event
+
+    @property
+    def clear_event(self):
+        return self._clear_event
 
     @property
     def name(self):
@@ -47,8 +52,8 @@ class LedTask(TaskBase):
     async def run(self):
         while True:
             await self._pause_event.wait()
+            self._pause_event.clear()
             old_red, old_grn, old_blu = 0, 0, 0
-            print("Led task running")
 
             # home in on random color
             for i in range(20):
@@ -75,8 +80,7 @@ class LedTask(TaskBase):
             self._led.color = (255, 0, 0)
             await asyncio.sleep(1.0)
             self._led.color = (0, 0, 0)
-            self._pause_event.clear()
-            print("Led task ran")
+            self._clear_event.set()
 
 
 class SpeakerTask(TaskBase):
@@ -93,12 +97,11 @@ class SpeakerTask(TaskBase):
     async def run(self):
         while True:
             await self._pause_event.wait()
-            print("Speaker task running")
+            self._pause_event.clear()
             sound = choice(self._sounds)
             mp3 = audiomp3.MP3Decoder(open(sound, "rb"))
             self._audio.play(mp3)
-            self._pause_event.clear()
-            print("Speaker task ran")
+            self._clear_event.set()
 
 
 class MotorTask(TaskBase):
@@ -117,68 +120,77 @@ class MotorTask(TaskBase):
     async def run(self):
         while True:
             await self._pause_event.wait()
-            print("Motor task running")
-            for duty_cycle in range(16, 100, 4):
+            self._pause_event.clear()
+            for duty_cycle in range(16, 50, 4):
                 throttle = duty_cycle / 100
                 self._motor.throttle = throttle
                 await asyncio.sleep(0.3)
-            for duty_cycle in range(100, 16, -4):
+
+            await asyncio.sleep(2.0)
+
+            for duty_cycle in range(50, 16, -4):
                 throttle = duty_cycle / 100
                 self._motor.throttle = throttle
                 await asyncio.sleep(0.3)
             self._motor.throttle = 0
-            self._pause_event.clear()
-            print("Motor task ran")
+            self._clear_event.set()
 
 
-class Pir:
+class Controller:
     def __init__(self):
         self._tasks = {}
-        self._pir = digitalio.DigitalInOut(board.GP21)
-        self._pir.direction = digitalio.Direction.INPUT
 
     def add_task(self, task: TaskBase):
         self._tasks[task.name] = task
 
     async def run(self):
-        old_value = self._pir.value
+        # give things time to settle down
+        await asyncio.sleep(5)
         while True:
-            pir_value = self._pir.value
-            if pir_value:
-                # is movement detected?
-                if not old_value:
+            # always start with flashing the eyes
+            led_task = self._tasks.get("led")
+            led_task.pause_event.set()
 
-                    # always start with flashing the eyes
-                    led_task = self._tasks.get("led")
-                    led_task.pause_event.set()
+            await asyncio.sleep(randint(1, 2))
 
-                    await asyncio.sleep(randint(1, 2))
+            # run the sound first and then the motor after a delay
+            speaker_task = self._tasks.get("speaker")
+            speaker_task.pause_event.set()
+            await asyncio.sleep(3)
+            motor_task = self._tasks.get("motor")
+            motor_task.pause_event.set()
 
-                    # run the sound first and then the motor after a delay
-                    speaker_task = self._tasks.get("speaker")
-                    speaker_task.pause_event.set()
-                    await asyncio.sleep(3)
-                    motor_task = self._tasks.get("motor")
-                    motor_task.pause_event.set()
+            # wait for the other tasks to finish
+            await asyncio.gather(
+                led_task.clear_event.wait(),
+                speaker_task.clear_event.wait(),
+                motor_task.clear_event.wait(),
+            )
+            led_task.clear_event.clear()
+            speaker_task.clear_event.clear()
+            motor_task.clear_event.clear()
 
-            old_value = pir_value
-            await asyncio.sleep(0.2)
+            # got to light sleep to save power
+            interval_sleep = randint(60, 120)
+            time_alarm = alarm.time.TimeAlarm(monotonic_time=time.monotonic() + interval_sleep)
+            alarm.light_sleep_until_alarms(time_alarm)
+            await asyncio.sleep(interval_sleep)
 
 
 async def main():
     led_task = LedTask("led")
     speaker_task = SpeakerTask("speaker")
     motor_task = MotorTask("motor")
-    pir_task = Pir()
-    pir_task.add_task(led_task)
-    pir_task.add_task(speaker_task)
-    pir_task.add_task(motor_task)
+    controller = Controller()
+    controller.add_task(led_task)
+    controller.add_task(speaker_task)
+    controller.add_task(motor_task)
 
     await asyncio.gather(
         asyncio.create_task(led_task.run()),
         asyncio.create_task(speaker_task.run()),
         asyncio.create_task(motor_task.run()),
-        asyncio.create_task(pir_task.run())
+        asyncio.create_task(controller.run())
     )
 
 
